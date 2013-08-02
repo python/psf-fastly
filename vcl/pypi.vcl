@@ -134,6 +134,12 @@ sub vcl_fetch {
         return (pass);
     }
 
+    # Don't store anything that has Cache-Control: no-cache
+    if (beresp.http.Cache-Control ~ "no-cache") {
+        set req.http.Fastly-Cachetype = "NOCACHE";
+        return (pass);
+    }
+
     # If the restarted connection still raised an error then cache the error
     #   for 1s (and up to 5s).
     if (beresp.status == 500 || beresp.status == 503) {
