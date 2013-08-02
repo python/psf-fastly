@@ -117,7 +117,7 @@ sub vcl_fetch {
     # If the response is a 404 from /packages work around the inability to set
     #   headers in the response which prevents us from using Surrogate-Key and
     #   thus purging
-    if (req.url ~ "^/packages" && beresp.status != 200) {
+    if (req.url ~ "^/packages" && (beresp.status != 200) && beresp.status != 301) {
         remove beresp.http.Cache-Control;
         set beresp.http.Cache-Control = "no-cache";
     }
