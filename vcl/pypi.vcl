@@ -114,6 +114,14 @@ sub vcl_fetch {
         set beresp.http.Cache-Control = "no-cache";
     }
 
+    # If the response is a 404 from /packages work around the inability to set
+    #   headers in the response which prevents us from using Surrogate-Key and
+    #   thus purging
+    if (req.url ~ "^/packages" && beresp.status != 200) {
+        remove beresp.http.Cache-Control;
+        set beresp.http.Cache-Control = "no-cache";
+    }
+
     # Don't store anything that issues a Set-Cookie header
     if (beresp.http.Set-Cookie) {
         set req.http.Fastly-Cachetype = "SETCOOKIE";
