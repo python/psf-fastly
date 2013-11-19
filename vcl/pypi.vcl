@@ -91,17 +91,6 @@ sub vcl_fetch {
     # Set the maximum grace period on an object
     set beresp.grace = 24h;
 
-    # Retry the connection for GET and HEAD requests if we hit a 500 or a 503.
-    if ((beresp.status == 500 || beresp.status == 503) && req.restarts < 1 && (req.request == "GET" || req.request == "HEAD")) {
-        restart;
-    }
-
-    # Send a header to the backend with how many times a request has been
-    #   restarted.
-    if(req.restarts > 0 ) {
-        set beresp.http.Fastly-Restarts = req.restarts;
-    }
-
     # Ensure that private pages have Cache-Control: private set on them.
     if (req.http.Authenticate || req.http.Authorization || req.http.Cookie) {
         remove beresp.http.Cache-Control;
@@ -130,15 +119,6 @@ sub vcl_fetch {
     if (beresp.http.Cache-Control ~ "no-cache") {
         set req.http.Fastly-Cachetype = "NOCACHE";
         return (pass);
-    }
-
-    # If the restarted connection still raised an error then cache the error
-    #   for 1s (and up to 5s).
-    if (beresp.status == 500 || beresp.status == 503) {
-        set req.http.Fastly-Cachetype = "ERROR";
-        set beresp.ttl = 1s;
-        set beresp.grace = 5s;
-        return (deliver);
     }
 
     # If the response is a 404 work around the lack of headers in the response
