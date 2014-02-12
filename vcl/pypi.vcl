@@ -36,6 +36,11 @@ sub vcl_recv {
             remove req.http.Accept-Encoding;
         }
     }
+    
+    # On a POST, we want to skip the shielding and hit backends directly.
+    if (req.request == "POST") {
+        set req.backend = autodirector_;
+    }
 
     # Force SSL for GET and HEAD requests
     if (req.request == "GET" || req.request == "HEAD") {
