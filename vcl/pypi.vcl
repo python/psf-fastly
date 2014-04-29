@@ -71,6 +71,13 @@ sub vcl_recv {
         remove req.http.Cookie;
     }
 
+    # Strip Cookies and Authentication headers from json urls
+    if (req.url ~ "^/pypi/([^/]+|[^/]+/[^/]+)/json$") {
+        remove req.http.Authenticate;
+        remove req.http.Authorization;
+        remove req.http.Cookie;
+    }
+
     # Certain pages should never be cached
     if (req.url ~ "^/(daytime|id|oauth)") {
         return (pass);
