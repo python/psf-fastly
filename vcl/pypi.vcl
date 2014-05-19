@@ -151,19 +151,3 @@ sub vcl_fetch {
 
     return(deliver);
 }
-
-
-sub vcl_deliver {
-#FASTLY deliver
-
-    if (!req.http.Fastly-Debug) {
-        remove resp.http.Server;
-        remove resp.http.Via;
-        remove resp.http.X-Served-By;
-        remove resp.http.X-Cache;
-        remove resp.http.X-Cache-Hits;
-        remove resp.http.X-Timer;
-    }
-
-    return(deliver);
-}
