@@ -110,7 +110,7 @@ sub vcl_fetch {
     }
 
     # Certain pages should never be cached
-    if (req.url ~ "^/(daytime|id|oauth)") {
+    if (req.url ~ "^/(daytime|serial|id|oauth)") {
         remove beresp.http.Cache-Control;
         set beresp.http.Cache-Control = "no-cache";
     }
