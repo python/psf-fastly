@@ -79,7 +79,7 @@ sub vcl_recv {
     }
 
     # Certain pages should never be cached
-    if (req.url ~ "^/(daytime|id|oauth)") {
+    if (req.url ~ "^/(daytime|serial|id|oauth)") {
         return (pass);
     }
 
