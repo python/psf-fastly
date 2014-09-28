@@ -161,3 +161,27 @@ sub vcl_fetch {
 
     return(deliver);
 }
+
+sub vcl_deliver {
+#FASTLY deliver
+
+   if(!resp.http.X-Backend) {
+      set resp.http.X-Backend = req.backend;
+   } else {
+      set resp.http.X-Backend = resp.http.X-Backend ", " req.backend;
+   }
+
+   if(!resp.http.X-Backend-Health) {
+      if(req.backend.healthy) {
+         set resp.http.X-Backend-Health = "UP";
+      } else {
+         set resp.http.X-Backend-Health = "DOWN";
+      }
+   } else {
+      if(req.backend.healthy) {
+         set resp.http.X-Backend-Health = resp.http.X-Backend-Health ", UP";
+      } else {
+         set resp.http.X-Backend-Health = resp.http.X-Backend-Health ", DOWN";
+      }
+   }
+}
