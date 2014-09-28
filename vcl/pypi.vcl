@@ -1,3 +1,10 @@
+director pypi_backup_mirror random {
+    {
+     .backend = F_pypi_backup_mirror0;
+     .weight = 100;
+    }
+}
+
 sub vcl_recv {
 #FASTLY recv
 
