@@ -21,12 +21,12 @@ sub vcl_recv {
     #       changes, particularly for XML-RPC since this will short-circuit that
     #       logic. Unfortuantely we can't do that until after Legacy PyPI is dead
     #       because of the Artifactory exclusion.
-    if (req.http.Host != "legacy.pypi.org") {
+    if (req.http.Host != "legacy.pypi.org" && !(req.http.User-Agent ~ "^Artifactory/")) {
         if (req.request == "POST" && (req.url ~ "^/pypi$" || req.url ~ "^/pypi/$") && req.http.Content-Type ~ "text/xml") {
             # Change the backend to Warehouse for XML-RPC.
             set req.http.Host = "pypi.org";
             set req.backend = F_pypi_org;
-        } else if (!(req.http.User-Agent ~ "^Artifactory/")) {
+        } else {
             # Set our location to Warehouse.
             set req.http.Location = "https://pypi.org" req.url;
 
