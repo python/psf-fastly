@@ -30,15 +30,15 @@ sub vcl_recv {
             # Set our location to Warehouse.
             set req.http.Location = "https://pypi.org" req.url;
 
-            # We want to use a 301 redirect for GET/HEAD, because that has the widest
+            # We want to use a 301/302 redirect for GET/HEAD, because that has the widest
             # support and is a permanent redirect. However it has the disadvantage of
-            # changing a POST to a GET, so for POST, etc we will attempt to use a 308
-            # redirect which will keep the method. 308 redirects are new and older
+            # changing a POST to a GET, so for POST, etc we will attempt to use a 308/307
+            # redirect which will keep the method. 308/307 redirects are new and older
             # tools may not support them, so we may need to revisit this.
             if (req.request == "GET" || req.request == "HEAD") {
-                error 750 "Moved Permanently";
+                error 751 "Found";
             } else {
-                error 752 "Permanent Redirect";
+                error 753 "Temporary Redirect";
             }
         }
     }
@@ -343,6 +343,13 @@ sub vcl_error {
         set obj.http.Location = req.http.Location;
         set obj.http.Content-Type = "text/html; charset=UTF-8";
         synthetic {"<html><head><title>308 Permanent Redirect</title></head><body><center><h1>308 Permanent Redirect</h1></center></body></html>"};
+        return(deliver);
+    }
+    else if (obj.status == 753) {
+        set obj.status = 307;
+        set obj.http.Location = req.http.Location;
+        set obj.http.Content-Type = "text/html; charset=UTF-8";
+        synthetic {"<html><head><title>308 Temporary Redirect</title></head><body><center><h1>308 Temporary Redirect</h1></center></body></html>"};
         return(deliver);
     }
 }
