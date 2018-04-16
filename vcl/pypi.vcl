@@ -14,6 +14,33 @@ sub vcl_recv {
       error 808 "Bad SSL Version";
     }
 
+    # Redirect all of these things to Warehouse, except for XML-RPC, which we will
+    # simply change the backend so that it points to Warehouse.
+    # TODO: We should probably move this redirect, as well as the XML-RPC handling
+    #       into the Warehouse service so that we don't miss any important VCL
+    #       changes, particularly for XML-RPC since this will short-circuit that
+    #       logic. Unfortuantely we can't do that until after Legacy PyPI is dead
+    #       because of the Artifactory exclusion.
+    if (req.request == "POST" && (req.url ~ "^/pypi$" || req.url ~ "^/pypi/$") && req.http.Content-Type ~ "text/xml") {
+        # Change the backend to Warehouse for XML-RPC.
+        set req.http.Host = "pypi.org";
+        set req.backend = F_pypi_org;
+    } else if (!(req.http.User-Agent ~ "^Artifactory/")) {
+        # Set our location to Warehouse.
+        set req.http.Location = "https://pypi.org" req.url;
+
+        # We want to use a 301 redirect for GET/HEAD, because that has the widest
+        # support and is a permanent redirect. However it has the disadvantage of
+        # changing a POST to a GET, so for POST, etc we will attempt to use a 308
+        # redirect which will keep the method. 308 redirects are new and older
+        # tools may not support them, so we may need to revisit this.
+        if (req.request == "GET" || req.request == "HEAD") {
+            error 750 "Moved Permanently";
+        } else {
+            error 752 "Permanent Redirect";
+        }
+    }
+
     # Some (Older) clients will send a hash fragment as part of the URL even
     # though that is a local only modification. This breaks this badly for the
     # files in S3, and in general it's just not needed.
@@ -307,6 +334,13 @@ sub vcl_error {
         set obj.http.Location = req.http.Location;
         set obj.http.Content-Type = "text/html; charset=UTF-8";
         synthetic {"<html><head><title>302 Found</title></head><body><center><h1>302 Found</h1></center></body></html>"};
+        return(deliver);
+    }
+    else if (obj.status == 752) {
+        set obj.status = 308;
+        set obj.http.Location = req.http.Location;
+        set obj.http.Content-Type = "text/html; charset=UTF-8";
+        synthetic {"<html><head><title>308 Permanent Redirect</title></head><body><center><h1>308 Permanent Redirect</h1></center></body></html>"};
         return(deliver);
     }
 }
