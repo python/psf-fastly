@@ -21,23 +21,25 @@ sub vcl_recv {
     #       changes, particularly for XML-RPC since this will short-circuit that
     #       logic. Unfortuantely we can't do that until after Legacy PyPI is dead
     #       because of the Artifactory exclusion.
-    if (req.request == "POST" && (req.url ~ "^/pypi$" || req.url ~ "^/pypi/$") && req.http.Content-Type ~ "text/xml") {
-        # Change the backend to Warehouse for XML-RPC.
-        set req.http.Host = "pypi.org";
-        set req.backend = F_pypi_org;
-    } else if (!(req.http.User-Agent ~ "^Artifactory/")) {
-        # Set our location to Warehouse.
-        set req.http.Location = "https://pypi.org" req.url;
+    if (req.http.Host != "legacy.pypi.org") {
+        if (req.request == "POST" && (req.url ~ "^/pypi$" || req.url ~ "^/pypi/$") && req.http.Content-Type ~ "text/xml") {
+            # Change the backend to Warehouse for XML-RPC.
+            set req.http.Host = "pypi.org";
+            set req.backend = F_pypi_org;
+        } else if (!(req.http.User-Agent ~ "^Artifactory/")) {
+            # Set our location to Warehouse.
+            set req.http.Location = "https://pypi.org" req.url;
 
-        # We want to use a 301 redirect for GET/HEAD, because that has the widest
-        # support and is a permanent redirect. However it has the disadvantage of
-        # changing a POST to a GET, so for POST, etc we will attempt to use a 308
-        # redirect which will keep the method. 308 redirects are new and older
-        # tools may not support them, so we may need to revisit this.
-        if (req.request == "GET" || req.request == "HEAD") {
-            error 750 "Moved Permanently";
-        } else {
-            error 752 "Permanent Redirect";
+            # We want to use a 301 redirect for GET/HEAD, because that has the widest
+            # support and is a permanent redirect. However it has the disadvantage of
+            # changing a POST to a GET, so for POST, etc we will attempt to use a 308
+            # redirect which will keep the method. 308 redirects are new and older
+            # tools may not support them, so we may need to revisit this.
+            if (req.request == "GET" || req.request == "HEAD") {
+                error 750 "Moved Permanently";
+            } else {
+                error 752 "Permanent Redirect";
+            }
         }
     }
 
