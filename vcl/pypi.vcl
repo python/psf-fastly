@@ -1,14 +1,72 @@
-director pypi_backup_mirror random{
-   {
-    .backend = F_mirror_ord;
-    .weight  = 100;
-   }{
-    .backend = F_mirror_syd;
-    .weight  = 100;
-   }
-}
-
 sub vcl_recv {
+
+    # The first N minutes of the hour, we want to block TLS that isn't TLSv1.2
+    # or higher.
+    # if ((std.atoi(strftime({"%M"}, now)) < 21) || ((std.atoi(strftime({"%M"}, now)) > 29) && (std.atoi(strftime({"%M"}, now)) < 51))) {
+    #     if (tls.client.protocol ~ "^TLSv1(\.(0|1))?$") {
+    #         set req.http.Error-Message = "This is a brown out of " tls.client.protocol " support. " tls.client.protocol " support is going away soon, upgrade to a TLSv1.2+ capable client.";
+    #         error 808 "Bad SSL Version";
+    #     }
+    # }
+    if (tls.client.protocol ~ "^TLSv1(\.(0|1))?$") {
+      set req.http.Error-Message = {"Support for "} regsub(tls.client.protocol, "^TLSv1$", "TLSv1.0") {" has been removed, please upgrade to a TLSv1.2+ client. Please see https://pyfound.blogspot.com/2017/01/time-to-upgrade-your-python-tls-v12.html
+      "};
+      error 808 "Bad SSL Version";
+    }
+
+    # Some (Older) clients will send a hash fragment as part of the URL even
+    # though that is a local only modification. This breaks this badly for the
+    # files in S3, and in general it's just not needed.
+    set req.url = regsub(req.url, "#.*$", "");
+
+    # Force SSL for GET and HEAD requests
+    if (req.request == "GET" || req.request == "HEAD") {
+        if (!req.http.Fastly-SSL) {
+            # Don't silently upgrade /simple/ and /packages/ to HTTPS, force the clients to change
+            if (req.url ~ "^/(simple|packages)") {
+                error 803 "SSL is required";
+            }
+
+            error 801 "Force SSL";
+        }
+    }
+
+    # We want to record the real URL early on.
+    set req.http.RealURL = req.url;
+    set req.http.RealURLPath = req.url.path;
+    set req.http.RealHost = req.http.Host;
+
+    # Currently Fastly does not provide a way to access response headers when
+    # the response is a 304 response. This is because the RFC states that only
+    # a limit set of headers should be sent with a 304 response, and the rest
+    # are SHOULD NOT. Since this stripping happens *prior* to vcl_deliver being
+    # ran, that breaks our ability to log on 304 responses. Ideally at some
+    # point Fastly offers us a way to access the "real" response headers even
+    # for a 304 response, but for now, we are going to remove the headers that
+    # allow a conditional response to be made. If at some point Fastly does
+    # allow this, then we can delete this code.
+    if (!req.http.Fastly-FF
+            && std.tolower(req.http.RealHost) == "files.pythonhosted.org"
+            && req.url.path ~ "^/packages/[a-f0-9]{2}/[a-f0-9]{2}/[a-f0-9]{60}/") {
+        unset req.http.If-None-Match;
+        unset req.http.If-Modified-Since;
+    }
+
+    # Strip Cookies and Authentication headers from urls whose output will
+    #   never be influenced by them.
+    if (req.url ~ "^/(simple|packages|serversig|stats|local-stats|static|mirrors|security)") {
+        remove req.http.Authenticate;
+        remove req.http.Authorization;
+        remove req.http.Cookie;
+    }
+
+    # Strip Cookies and Authentication headers from json urls
+    if (req.url ~ "^/pypi/([^/]+|[^/]+/[^/]+)/json$") {
+        remove req.http.Authenticate;
+        remove req.http.Authorization;
+        remove req.http.Cookie;
+    }
+
 #FASTLY recv
 
     # Handle grace periods for where we will serve a stale response
@@ -49,13 +107,11 @@ sub vcl_recv {
 
     # On a POST, we want to skip the shielding and hit backends directly.
     if (req.request == "POST") {
-        set req.backend = autodirector_;
-    }
-
-    # Force SSL for GET and HEAD requests
-    if (req.request == "GET" || req.request == "HEAD") {
-        if (!req.http.Fastly-SSL) {
-            error 801 "Force SSL";
+        if ((req.url ~ "^/pypi$" || req.url ~ "^/pypi/$") && (req.http.Content-Type ~ "text/xml") && (randombool(0,100) || req.http.Force-Warehouse-XMLRPC)) {
+          set req.backend = F_pypi_org;
+          set req.http.Host = "pypi.org";
+        } else {
+          set req.backend = autodirector_;
         }
     }
 
@@ -73,23 +129,8 @@ sub vcl_recv {
         set req.http.X-Forwarded-Proto = "http";
     }
 
-    # Strip Cookies and Authentication headers from urls whose output will
-    #   never be influenced by them.
-    if (req.url ~ "^/(simple|packages|serversig|stats|local-stats|static|mirrors|security)") {
-        remove req.http.Authenticate;
-        remove req.http.Authorization;
-        remove req.http.Cookie;
-    }
-
-    # Strip Cookies and Authentication headers from json urls
-    if (req.url ~ "^/pypi/([^/]+|[^/]+/[^/]+)/json$") {
-        remove req.http.Authenticate;
-        remove req.http.Authorization;
-        remove req.http.Cookie;
-    }
-
     # Certain pages should never be cached
-    if (req.url ~ "^/(daytime|serial|id|oauth)") {
+    if (req.url ~ "^/(daytime|id|oauth)") {
         return (pass);
     }
 
@@ -99,8 +140,18 @@ sub vcl_recv {
     }
 
     # Don't attempt to cache requests that include Authorization or Cookies
-    if (req.http.Authenticate || req.http.Authorization || req.http.Cookie) {
-        return (pass);
+    # unless they are going to Amazon S3.
+    if (!req.http.Host ~ ".s3.amazonaws.com$") {
+        if (req.http.Authenticate || req.http.Authorization || req.http.Cookie) {
+            return (pass);
+        }
+    }
+
+    if ((req.url ~ "^/simple/") && (!(req.http.User-Agent ~ "^Artifactory/"))) {
+        if (randombool(0,100) || req.http.Force-Warehouse-Redirect) {
+            set req.http.Location = "https://pypi.org" req.url;
+            error 751 "Found";
+        }
     }
 
     return(lookup);
@@ -113,6 +164,33 @@ sub vcl_fetch {
     # Set the maximum grace period on an object
     set beresp.grace = 24h;
 
+    if (beresp.http.x-amz-meta-project || beresp.http.x-amz-meta-version || beresp.http.x-amz-meta-package-type) {
+        # Stash these variables on the Request so that we can access them in
+        # vcl_deliver even during a 304 response.
+        set req.http.Fastly-amz-meta-project = beresp.http.x-amz-meta-project;
+        set req.http.Fastly-amz-meta-version = beresp.http.x-amz-meta-version;
+        set req.http.Fastly-amz-meta-package-type = beresp.http.x-amz-meta-package-type;
+    }
+
+    # We need to modify a few things if we're caching an Amazon AWS request.
+    if (req.http.Host ~ ".s3.amazonaws.com$") {
+        if (beresp.status == 200) {
+           set beresp.http.Cache-Control = "max-age=31557600, public";
+           set beresp.ttl = 31557600s;
+        }
+        elseif (beresp.status == 404) {
+            set beresp.http.Cache-Control = "max-age=60, public";
+            set beresp.ttl = 60s;
+        }
+
+        remove beresp.http.x-amz-id-2;
+        remove beresp.http.x-amz-request-id;
+        remove beresp.http.x-amz-version-id;
+        remove beresp.http.x-amz-meta-s3cmd-attrs;
+
+        return (deliver);
+    }
+
     # Ensure that private pages have Cache-Control: private set on them.
     if (req.http.Authenticate || req.http.Authorization || req.http.Cookie) {
         remove beresp.http.Cache-Control;
@@ -120,7 +198,7 @@ sub vcl_fetch {
     }
 
     # Certain pages should never be cached
-    if (req.url ~ "^/(daytime|serial|id|oauth)") {
+    if (req.url ~ "^/(daytime|id|oauth)") {
         remove beresp.http.Cache-Control;
         set beresp.http.Cache-Control = "no-cache";
     }
@@ -160,4 +238,75 @@ sub vcl_fetch {
     }
 
     return(deliver);
+}
+
+
+sub vcl_deliver {
+#FASTLY deliver
+
+    set resp.http.X-Frame-Options = "deny";
+    set resp.http.X-XSS-Protection = "1; mode=block";
+    set resp.http.X-Content-Type-Options = "nosniff";
+    set resp.http.X-Permitted-Cross-Domain-Policies = "none";
+
+    # Currently Fastly does not provide a way to access response headers when
+    # the response is a 304 response. This is because the RFC states that only
+    # a limit set of headers should be sent with a 304 response, and the rest
+    # are SHOULD NOT. Since this stripping happens *prior* to vcl_deliver being
+    # ran, that breaks our ability to log on 304 responses. Ideally at some
+    # point Fastly offers us a way to access the "real" response headers even
+    # for a 304 response, but for now, we are going to remove the headers that
+    # allow a conditional response to be made. If at some point Fastly does
+    # allow this, then we can delete this code, and also allow a 304 response
+    # in the http_status_matches() check further down.
+    if (!req.http.Fastly-FF
+            && std.tolower(req.http.RealHost) == "files.pythonhosted.org"
+            && req.url.path ~ "^/packages/[a-f0-9]{2}/[a-f0-9]{2}/[a-f0-9]{60}/") {
+        unset resp.http.ETag;
+        unset resp.http.Last-Modified;
+    }
+
+    # If we're not executing a shielding request, and the URL is one of our file
+    # URLs, and it's a GET request, and the response is either a 200 or a 304
+    # then we want to log an event stating that a download has taken place.
+    if (!req.http.Fastly-FF && req.http.RealURLPath ~ "^/packages/[a-f0-9]{2}/[a-f0-9]{2}/[a-f0-9]{60}/" && req.request == "GET" && http_status_matches(resp.status, "200")) {
+        if (http_status_matches(resp.status, "200,304")) {
+            log {"syslog "} req.service_id {" linehaul :: "} "2@" now "|" geoip.country_code "|" req.http.RealURLPath "|" tls.client.protocol "|" tls.client.cipher "|" resp.http.x-amz-meta-project "|" resp.http.x-amz-meta-version "|" resp.http.x-amz-meta-package-type "|" req.http.user-agent;
+            log {"syslog "} req.service_id {" downloads :: "} "2@" now "|" geoip.country_code "|" req.http.RealURLPath "|" tls.client.protocol "|" tls.client.cipher "|" resp.http.x-amz-meta-project "|" resp.http.x-amz-meta-version "|" resp.http.x-amz-meta-package-type "|" req.http.user-agent;
+        }
+    }
+
+    return(deliver);
+}
+
+
+sub vcl_error {
+#FASTLY error
+
+    if (obj.status == 803) {
+        set obj.status = 403;
+        set obj.response = "SSL is required";
+        set obj.http.Content-Type = "text/plain; charset=UTF-8";
+        synthetic {"SSL is required."};
+        return (deliver);
+    } else if (obj.status == 808) {
+        set obj.status = 403;
+        set obj.response = "TLSv1.2+ is required";
+        set obj.http.Content-Type = "text/plain; charset=UTF-8";
+        synthetic req.http.Error-Message;
+        return (deliver);
+    } else if (obj.status == 750) {
+        set obj.status = 301;
+        set obj.http.Location = req.http.Location;
+        set obj.http.Content-Type = "text/html; charset=UTF-8";
+        synthetic {"<html><head><title>301 Moved Permanently</title></head><body><center><h1>301 Moved Permanently</h1></center></body></html>"};
+        return(deliver);
+    }
+    else if (obj.status == 751) {
+        set obj.status = 302;
+        set obj.http.Location = req.http.Location;
+        set obj.http.Content-Type = "text/html; charset=UTF-8";
+        synthetic {"<html><head><title>302 Found</title></head><body><center><h1>302 Found</h1></center></body></html>"};
+        return(deliver);
+    }
 }
