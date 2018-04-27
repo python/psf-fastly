@@ -1,19 +1,5 @@
 sub vcl_recv {
 
-    # The first N minutes of the hour, we want to block TLS that isn't TLSv1.2
-    # or higher.
-    # if ((std.atoi(strftime({"%M"}, now)) < 21) || ((std.atoi(strftime({"%M"}, now)) > 29) && (std.atoi(strftime({"%M"}, now)) < 51))) {
-    #     if (tls.client.protocol ~ "^TLSv1(\.(0|1))?$") {
-    #         set req.http.Error-Message = "This is a brown out of " tls.client.protocol " support. " tls.client.protocol " support is going away soon, upgrade to a TLSv1.2+ capable client.";
-    #         error 808 "Bad SSL Version";
-    #     }
-    # }
-    if (tls.client.protocol ~ "^TLSv1(\.(0|1))?$") {
-      set req.http.Error-Message = {"Support for "} regsub(tls.client.protocol, "^TLSv1$", "TLSv1.0") {" has been removed, please upgrade to a TLSv1.2+ client. Please see https://pyfound.blogspot.com/2017/01/time-to-upgrade-your-python-tls-v12.html
-      "};
-      error 808 "Bad SSL Version";
-    }
-
     # Redirect all of these things to Warehouse, except for XML-RPC, which we will
     # simply change the backend so that it points to Warehouse.
     # TODO: We should probably move this redirect, as well as the XML-RPC handling
@@ -24,11 +10,11 @@ sub vcl_recv {
     if (req.http.Host != "legacy.pypi.org" && !(req.http.User-Agent ~ "^Artifactory/")) {
         if (req.request == "POST" && (req.url ~ "^/pypi$" || req.url ~ "^/pypi/$") && req.http.Content-Type ~ "text/xml") {
             # Change the backend to Warehouse for XML-RPC.
-            set req.http.Host = "pypi.org";
-            set req.backend = F_pypi_org;
+            set req.http.Host = "test.pypi.org";
+            set req.backend = F_test_pypi_org;
         } else {
             # Set our location to Warehouse.
-            set req.http.Location = "https://pypi.org" req.url;
+            set req.http.Location = "https://test.pypi.org" req.url;
 
             # We want to use a 301/302 redirect for GET/HEAD, because that has the widest
             # support and is a permanent redirect. However it has the disadvantage of
@@ -36,9 +22,9 @@ sub vcl_recv {
             # redirect which will keep the method. 308/307 redirects are new and older
             # tools may not support them, so we may need to revisit this.
             if (req.request == "GET" || req.request == "HEAD") {
-                error 751 "Found";
+                error 750 "Moved Permanently";
             } else {
-                error 753 "Temporary Redirect";
+                error 752 "Permanent Redirect";
             }
         }
     }
@@ -136,12 +122,7 @@ sub vcl_recv {
 
     # On a POST, we want to skip the shielding and hit backends directly.
     if (req.request == "POST") {
-        if ((req.url ~ "^/pypi$" || req.url ~ "^/pypi/$") && (req.http.Content-Type ~ "text/xml") && (randombool(0,100) || req.http.Force-Warehouse-XMLRPC)) {
-          set req.backend = F_pypi_org;
-          set req.http.Host = "pypi.org";
-        } else {
-          set req.backend = autodirector_;
-        }
+        set req.backend = autodirector_;
     }
 
     # Tell Varnish to use X-Forwarded-For, to set "real" IP addresses on all
@@ -176,10 +157,13 @@ sub vcl_recv {
         }
     }
 
-    if ((req.url ~ "^/simple/") && (!(req.http.User-Agent ~ "^Artifactory/"))) {
-        if (randombool(0,100) || req.http.Force-Warehouse-Redirect) {
-            set req.http.Location = "https://pypi.org" req.url;
-            error 751 "Found";
+    set req.http.X-ClientIDHash = digest.hash_md5(client.ip req.http.User-Agent);
+    set req.http.X-ClientID = std.strtol(req.http.X-ClientIDHash,16);
+
+    if (req.url ~ "^/simple/") {
+        if (randombool_seeded(1,100,std.atoi(req.http.X-ClientID)) || req.http.Force-Warehouse-Redirect) {
+            set req.http.Location = "https://test.pypi.org" req.url;
+            error 751 "See Other";
         }
     }
 
@@ -298,12 +282,12 @@ sub vcl_deliver {
     # If we're not executing a shielding request, and the URL is one of our file
     # URLs, and it's a GET request, and the response is either a 200 or a 304
     # then we want to log an event stating that a download has taken place.
-    if (!req.http.Fastly-FF && req.http.RealURLPath ~ "^/packages/[a-f0-9]{2}/[a-f0-9]{2}/[a-f0-9]{60}/" && req.request == "GET" && http_status_matches(resp.status, "200")) {
-        if (http_status_matches(resp.status, "200,304")) {
-            log {"syslog "} req.service_id {" linehaul :: "} "2@" now "|" geoip.country_code "|" req.http.RealURLPath "|" tls.client.protocol "|" tls.client.cipher "|" resp.http.x-amz-meta-project "|" resp.http.x-amz-meta-version "|" resp.http.x-amz-meta-package-type "|" req.http.user-agent;
-            log {"syslog "} req.service_id {" downloads :: "} "2@" now "|" geoip.country_code "|" req.http.RealURLPath "|" tls.client.protocol "|" tls.client.cipher "|" resp.http.x-amz-meta-project "|" resp.http.x-amz-meta-version "|" resp.http.x-amz-meta-package-type "|" req.http.user-agent;
-        }
-    }
+    # if (!req.http.Fastly-FF && req.http.RealURLPath ~ "^/packages/[a-f0-9]{2}/[a-f0-9]{2}/[a-f0-9]{60}/" && req.request == "GET" && http_status_matches(resp.status, "200")) {
+    #     if (http_status_matches(resp.status, "200,304")) {
+    #         log {"syslog "} req.service_id {" linehaul :: "} "2@" now "|" geoip.country_code "|" req.http.RealURLPath "|" tls.client.protocol "|" tls.client.cipher "|" resp.http.x-amz-meta-project "|" resp.http.x-amz-meta-version "|" resp.http.x-amz-meta-package-type "|" req.http.user-agent;
+    #         log {"syslog "} req.service_id {" downloads :: "} "2@" now "|" geoip.country_code "|" req.http.RealURLPath "|" tls.client.protocol "|" tls.client.cipher "|" resp.http.x-amz-meta-project "|" resp.http.x-amz-meta-version "|" resp.http.x-amz-meta-package-type "|" req.http.user-agent;
+    #     }
+    # }
 
     return(deliver);
 }
@@ -320,9 +304,9 @@ sub vcl_error {
         return (deliver);
     } else if (obj.status == 808) {
         set obj.status = 403;
-        set obj.response = "TLSv1.2+ is required";
+        set obj.response = obj.http.Error-Message;
         set obj.http.Content-Type = "text/plain; charset=UTF-8";
-        synthetic req.http.Error-Message;
+        synthetic obj.http.Error-Message;
         return (deliver);
     } else if (obj.status == 750) {
         set obj.status = 301;
