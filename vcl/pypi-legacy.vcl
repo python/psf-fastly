@@ -125,16 +125,6 @@ sub vcl_recv {
         }
     }
 
-    # On a POST, we want to skip the shielding and hit backends directly.
-    if (req.request == "POST") {
-        if ((req.url ~ "^/pypi$" || req.url ~ "^/pypi/$") && (req.http.Content-Type ~ "text/xml") && (randombool(100,100) || req.http.Force-Warehouse-XMLRPC)) {
-          set req.backend = F_pypi_org;
-          set req.http.Host = "pypi.org";
-        } else {
-          set req.backend = autodirector_;
-        }
-    }
-
     # Tell Varnish to use X-Forwarded-For, to set "real" IP addresses on all
     #   requests
     remove req.http.X-Forwarded-For;
