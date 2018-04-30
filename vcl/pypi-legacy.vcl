@@ -1,13 +1,6 @@
 sub vcl_recv {
 
-    # The first N minutes of the hour, we want to block TLS that isn't TLSv1.2
-    # or higher.
-    # if ((std.atoi(strftime({"%M"}, now)) < 21) || ((std.atoi(strftime({"%M"}, now)) > 29) && (std.atoi(strftime({"%M"}, now)) < 51))) {
-    #     if (tls.client.protocol ~ "^TLSv1(\.(0|1))?$") {
-    #         set req.http.Error-Message = "This is a brown out of " tls.client.protocol " support. " tls.client.protocol " support is going away soon, upgrade to a TLSv1.2+ capable client.";
-    #         error 808 "Bad SSL Version";
-    #     }
-    # }
+    # Disable old TLS
     if (tls.client.protocol ~ "^TLSv1(\.(0|1))?$") {
       set req.http.Error-Message = {"Support for "} regsub(tls.client.protocol, "^TLSv1$", "TLSv1.0") {" has been removed, please upgrade to a TLSv1.2+ client. Please see https://pyfound.blogspot.com/2017/01/time-to-upgrade-your-python-tls-v12.html
       "};
@@ -21,25 +14,23 @@ sub vcl_recv {
     #       changes, particularly for XML-RPC since this will short-circuit that
     #       logic. Unfortuantely we can't do that until after Legacy PyPI is dead
     #       because of the Artifactory exclusion.
-    if (req.http.Host != "legacy.pypi.org" && !(req.http.User-Agent ~ "^Artifactory/")) {
-        if (req.request == "POST" && (req.url ~ "^/pypi$" || req.url ~ "^/pypi/$") && req.http.Content-Type ~ "text/xml") {
-            # Change the backend to Warehouse for XML-RPC.
-            set req.http.Host = "pypi.org";
-            set req.backend = F_pypi_org;
-        } else {
-            # Set our location to Warehouse.
-            set req.http.Location = "https://pypi.org" req.url;
+    if (req.request == "POST" && (req.url ~ "^/pypi$" || req.url ~ "^/pypi/$") && req.http.Content-Type ~ "text/xml") {
+        # Change the backend to Warehouse for XML-RPC.
+        set req.http.Host = "pypi.org";
+        set req.backend = F_pypi_org;
+    } else {
+        # Set our location to Warehouse.
+        set req.http.Location = "https://pypi.org" req.url;
 
-            # We want to use a 301/302 redirect for GET/HEAD, because that has the widest
-            # support and is a permanent redirect. However it has the disadvantage of
-            # changing a POST to a GET, so for POST, etc we will attempt to use a 308/307
-            # redirect which will keep the method. 308/307 redirects are new and older
-            # tools may not support them, so we may need to revisit this.
-            if (req.request == "GET" || req.request == "HEAD") {
-                error 750 "Moved Permanently";
-            } else {
-                error 752 "Permanent Redirect";
-            }
+        # We want to use a 301/302 redirect for GET/HEAD, because that has the widest
+        # support and is a permanent redirect. However it has the disadvantage of
+        # changing a POST to a GET, so for POST, etc we will attempt to use a 308/307
+        # redirect which will keep the method. 308/307 redirects are new and older
+        # tools may not support them, so we may need to revisit this.
+        if (req.request == "GET" || req.request == "HEAD") {
+            error 750 "Moved Permanently";
+        } else {
+            error 752 "Permanent Redirect";
         }
     }
 
